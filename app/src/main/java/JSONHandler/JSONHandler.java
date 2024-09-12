@@ -3,6 +3,7 @@ package JSONHandler;
 import java.io.*;
 import java.util.*;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 public class JSONHandler {
     // Method to parse the input file and convert it into a JSON format
@@ -59,5 +60,29 @@ public class JSONHandler {
     // Method to convert the list of weather data into a JSON array string
     public static String convertToJSON(List<JSONObject> weatherDataList) {
         return weatherDataList.toString();
+    }
+
+    // Method to strip JSON formatting and display data line-by-line
+    public static void displayWeatherData(String jsonData) {
+        try {
+            // Parse the JSON string into a JSONArray
+            JSONArray jsonArray = new JSONArray(jsonData);
+
+            // Iterate over each JSONObject in the JSONArray
+            for (int i = 0; i < jsonArray.length(); i++) {
+                JSONObject jsonObject = jsonArray.getJSONObject(i);
+
+                // Iterate over each key-value pair in the JSONObject
+                for (String key : jsonObject.keySet()) {
+                    String value = jsonObject.getString(key);
+                    System.out.println(key + ": " + value);
+                }
+
+                // Print a newline to separate different entries
+                System.out.println();
+            }
+        } catch (Exception e) {
+            System.out.println("Error processing JSON data: " + e.getMessage());
+        }
     }
 }
