@@ -2,125 +2,109 @@ package ContentServer;
 
 import java.io.*;
 import java.net.*;
+import java.nio.file.*;
 import java.util.*;
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.util.concurrent.*;
 import LamportClock.LamportClock;
 import JSONHandler.JSONHandler;
 
 public class ContentServer {
-    private String serverName;
-    private int port;
-    private String filePath;
-    private LamportClock lamportClock;
+    private static final int UPDATE_INTERVAL = 15000;
+    private static final int MAX_RETRIES = 3;
+    private static final int RETRY_DELAY = 5000; // 5 seconds
+    private final LamportClock lamportClock = new LamportClock();
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-    public ContentServer(String serverName, int port, String filePath) {
-        this.serverName = serverName;
-        this.port = port;
+    private final String serverUrl;
+    private final String filePath;
+    private Map<String, String> weatherData;
+
+    public ContentServer(String serverUrl, String filePath) {
+        this.serverUrl = serverUrl;
         this.filePath = filePath;
-        this.lamportClock = new LamportClock();
     }
 
     public void start() {
+        loadWeatherData();
+        scheduler.scheduleAtFixedRate(this::sendUpdate, 0, UPDATE_INTERVAL, TimeUnit.MILLISECONDS);
+    }
+
+    private void loadWeatherData() {
         try {
-            // Create a socket connection to the Aggregation Server
-            Socket socket = new Socket(serverName, port);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-            // Read and parse the file using JSONHandler
-            List<JSONObject> weatherDataList = JSONHandler.parseWeatherData(filePath);
-
-            // Convert JSON objects to a single JSON array string
-            String jsonData = new JSONArray(weatherDataList).toString();
-
-            // Include Lamport Clock value in PUT request headers
-            sendPutRequest(out, jsonData);
-
-            // Handle response and update Lamport Clock
-            handleResponse(in);
-
-            // Close resources
-            out.close();
-            in.close();
-            socket.close();
+            List<String> lines = Files.readAllLines(Paths.get(filePath));
+            weatherData = new HashMap<>();
+            for (String line : lines) {
+                String[] parts = line.split(":", 2);
+                if (parts.length == 2) {
+                    weatherData.put(parts[0].trim(), parts[1].trim());
+                }
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private void handleResponse(BufferedReader in) throws IOException {
-        String responseLine;
-        StringBuilder responseHeaders = new StringBuilder();
-        int statusCode = -1;
+    private void sendUpdate() {
+        int retries = 0;
+        while (retries < MAX_RETRIES) {
+            try {
+                URI uri = URI.create(serverUrl);
+                HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+                connection.setRequestMethod("PUT");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Lamport-Clock", String.valueOf(lamportClock.getTime()));
 
-        while ((responseLine = in.readLine()) != null) {
-            if (responseLine.isEmpty()) {
-                // End of headers
-                break;
+                lamportClock.tick();
+                weatherData.put("timestamp", String.valueOf(lamportClock.getTime()));
+
+                List<Map<String, String>> dataList = new ArrayList<>();
+                dataList.add(weatherData);
+                String jsonData = JSONHandler.convertToJSON(dataList);
+
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = jsonData.getBytes("utf-8");
+                    os.write(input, 0, input.length);
+                }
+
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_CREATED) {
+                    System.out.println("Update sent successfully");
+                    String lamportClockHeader = connection.getHeaderField("Lamport-Clock");
+                    if (lamportClockHeader != null) {
+                        lamportClock.update(Long.parseLong(lamportClockHeader));
+                    }
+                    break;
+                } else {
+                    System.out.println("Failed to send update. Response Code: " + responseCode);
+                }
+
+                connection.disconnect();
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-            responseHeaders.append(responseLine).append("\n");
-            // Extract status code from the response status line
-            if (responseLine.startsWith("HTTP/1.1")) {
-                statusCode = Integer.parseInt(responseLine.split(" ")[1]);
+
+            retries++;
+            if (retries < MAX_RETRIES) {
+                System.out.println("Retrying in " + RETRY_DELAY / 1000 + " seconds...");
+                try {
+                    Thread.sleep(RETRY_DELAY);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
 
-        // Handle the status code
-        switch (statusCode) {
-            case 201:
-                System.out.println("Received status 201: Created");
-                break;
-            case 200:
-                System.out.println("Received status 200: OK");
-                break;
-            case 204:
-                System.out.println("Received status 204: No Content");
-                break;
-            case 400:
-                System.out.println("Received status 400: Bad Request");
-                break;
-            case 500:
-                System.out.println("Received status 500: Internal Server Error");
-                break;
-            default:
-                System.out.println("Received unknown status code: " + statusCode);
-                break;
+        if (retries == MAX_RETRIES) {
+            System.out.println("Failed to send update after " + MAX_RETRIES + " attempts.");
         }
-
-        // If Lamport Clock is included in headers, update it
-        if (responseHeaders.toString().contains("X-Lamport-Clock:")) {
-            int receivedLamportClock = Integer.parseInt(responseHeaders.toString().split("X-Lamport-Clock:")[1].split("\n")[0].trim());
-            lamportClock.update(receivedLamportClock);
-        } else {
-            lamportClock.increment(); // Increment if no Lamport Clock header is present
-        }
-    }
-    
-
-    private void sendPutRequest(PrintWriter out, String jsonData) {
-        // Construct headers
-        out.println("PUT /weather.json HTTP/1.1");
-        out.println("User-Agent: ATOMClient/1/0");
-        out.println("Content-Type: application/json");
-        out.println("Content-Length: " + jsonData.length());
-        out.println("X-Lamport-Clock: " + lamportClock.getClock()); // Add Lamport Clock header
-        out.println(); // Blank line to separate headers from body
-        out.println(jsonData);
     }
 
     public static void main(String[] args) {
-        if (args.length != 3) {
-            System.err.println("Usage: java ContentServer <server_name> <port> <file_path>");
-            System.exit(1);
+        if (args.length != 2) {
+            System.out.println("Usage: java ContentServer <server_url> <file_path>");
+            return;
         }
-
-        String serverName = args[0];
-        int port = Integer.parseInt(args[1]);
-        String filePath = args[2];
-
-        ContentServer contentServer = new ContentServer(serverName, port, filePath);
-        contentServer.start();
+        new ContentServer(args[0], args[1]).start();
     }
 }

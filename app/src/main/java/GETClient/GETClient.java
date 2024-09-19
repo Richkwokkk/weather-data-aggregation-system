@@ -2,105 +2,84 @@ package GETClient;
 
 import java.io.*;
 import java.net.*;
+import java.util.*;
 import LamportClock.LamportClock;
 import JSONHandler.JSONHandler;
 
 public class GETClient {
+    private static final int MAX_RETRIES = 3;
+    private static final int RETRY_DELAY = 5000;
+    private final LamportClock lamportClock = new LamportClock();
 
-    private LamportClock lamportClock;
+    public void getWeatherData(String serverUrl, String stationId) {
+        int retries = 0;
+        while (retries < MAX_RETRIES) {
+            try {
+                URI uri = URI.create(serverUrl);
+                HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Lamport-Clock", String.valueOf(lamportClock.getTime()));
 
-    public GETClient() {
-        this.lamportClock = new LamportClock();
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    String lamportClockHeader = connection.getHeaderField("Lamport-Clock");
+                    if (lamportClockHeader != null) {
+                        lamportClock.update(Long.parseLong(lamportClockHeader));
+                    }
+                    lamportClock.tick();
+
+                    try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                        String inputLine;
+                        StringBuilder response = new StringBuilder();
+                        while ((inputLine = in.readLine()) != null) {
+                            response.append(inputLine);
+                        }
+                        List<Map<String, String>> weatherDataList = JSONHandler.parseJSON(response.toString());
+                        displayWeatherData(weatherDataList, stationId);
+                    }
+                    break;
+                } else {
+                    System.out.println("GET request failed. Response Code: " + responseCode);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            retries++;
+            if (retries < MAX_RETRIES) {
+                System.out.println("Retrying in " + RETRY_DELAY / 1000 + " seconds...");
+                try {
+                    Thread.sleep(RETRY_DELAY);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        if (retries == MAX_RETRIES) {
+            System.out.println("Failed to get weather data after " + MAX_RETRIES + " attempts.");
+        }
+    }
+
+    private void displayWeatherData(List<Map<String, String>> weatherDataList, String stationId) {
+        System.out.println("Current Weather Data:");
+        for (Map<String, String> data : weatherDataList) {
+            if (stationId == null || stationId.equals(data.get("id"))) {
+                for (Map.Entry<String, String> entry : data.entrySet()) {
+                    System.out.println(entry.getKey() + ": " + entry.getValue());
+                }
+                System.out.println("--------------------");
+            }
+        }
     }
 
     public static void main(String[] args) {
-        // Parse command line args for server name and port
         if (args.length < 1) {
-            System.out.println("Usage: java GETClient <server:port> [<stationID>]");
+            System.out.println("Usage: java GETClient <server_url> [station_id]");
             return;
         }
-        
-        String serverName = args[0];
-        String stationID = (args.length > 1) ? args[1] : null;
-
-        // Initialize the client
-        GETClient client = new GETClient();
-        client.sendGETRequest(serverName, stationID);
-    }
-
-    private void sendGETRequest(String serverName, String stationID) {
-        try {
-            // Extract server host and port
-            String[] serverDetails = serverName.split(":");
-            String host = serverDetails[0];
-            int port = Integer.parseInt(serverDetails[1]);
-
-            // Establish connection to server
-            Socket socket = new Socket(host, port);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-            // Increment the Lamport clock before sending the request
-            lamportClock.increment();
-            long lamportTimestamp = lamportClock.getClock();
-
-            // Formulate GET request
-            StringBuilder request = new StringBuilder("GET /weather.json HTTP/1.1\r\n");
-            request.append("Host: ").append(serverName).append("\r\n");
-            request.append("User-Agent: GETClient/1.0\r\n");
-            request.append("Connection: close\r\n");
-            request.append("Lamport-Timestamp: ").append(lamportTimestamp).append("\r\n");
-
-            if (stationID != null) {
-                request.append("Station-ID: ").append(stationID).append("\r\n");
-            }
-
-            request.append("\r\n");
-
-            // Send the request to the server
-            out.print(request.toString());
-            out.flush();
-
-            // Handle the response
-            handleResponse(in);
-
-            // Close resources
-            in.close();
-            out.close();
-            socket.close();
-        } catch (IOException e) {
-            System.err.println("Error during communication: " + e.getMessage());
-        }
-    }
-
-    private void handleResponse(BufferedReader in) throws IOException {
-        String responseLine;
-        StringBuilder responseData = new StringBuilder();
-        int receivedLamportTimestamp = -1;
-
-        // Read and store response
-        while ((responseLine = in.readLine()) != null) {
-            // Check for Lamport timestamp in response headers
-            if (responseLine.startsWith("Lamport-Timestamp:")) {
-                receivedLamportTimestamp = Integer.parseInt(responseLine.split(":")[1].trim());
-            }
-            responseData.append(responseLine);
-            responseData.append("\n");
-        }
-
-        // Synchronize the Lamport clock with the server's timestamp
-        if (receivedLamportTimestamp != -1) {
-            lamportClock.update(receivedLamportTimestamp);
-        }
-
-        // Assuming the HTTP headers end with two line breaks, we extract the body
-        String responseString = responseData.toString();
-        String jsonBody = responseString.substring(responseString.indexOf("\r\n\r\n") + 4);
-
-        // Parse and display the weather data using JSONHandler
-        JSONHandler.displayWeatherData(jsonBody);
-
-        // Increment Lamport Clock after processing the response
-        lamportClock.increment();
+        String serverUrl = args[0];
+        String stationId = args.length > 1 ? args[1] : null;
+        new GETClient().getWeatherData(serverUrl, stationId);
     }
 }

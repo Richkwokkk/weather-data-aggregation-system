@@ -2,87 +2,134 @@ package JSONHandler;
 
 import java.io.*;
 import java.util.*;
-import org.json.JSONObject;
-import org.json.JSONArray;
 
 public class JSONHandler {
-    // Method to parse the input file and convert it into a JSON format
-    public static List<JSONObject> parseWeatherData(String filePath) throws IOException {
-        List<JSONObject> weatherDataList = new ArrayList<>();
+
+    public static List<Map<String, String>> parseWeatherData(String filePath) throws IOException {
+        List<Map<String, String>> weatherDataList = new ArrayList<>();
         File file = new File(filePath);
 
         if (!file.exists()) {
             System.out.println("No weather data file found.");
-            return weatherDataList; // return an empty list
+            return weatherDataList;
         }
 
-        BufferedReader reader = new BufferedReader(new FileReader(file));
-        String line;
-        JSONObject currentEntry = new JSONObject();
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            Map<String, String> currentEntry = new LinkedHashMap<>();
 
-        while ((line = reader.readLine()) != null) {
-            // Skip empty lines
-            if (line.trim().isEmpty()) {
-                continue;
-            }
-
-            // Split the line by the first occurrence of the ':' delimiter
-            int delimiterIndex = line.indexOf(":");
-            if (delimiterIndex == -1) {
-                // If the line does not contain a key-value pair, skip it
-                continue;
-            }
-
-            String key = line.substring(0, delimiterIndex).trim();
-            String value = line.substring(delimiterIndex + 1).trim();
-
-            // If we reach a new 'id' key, save the previous entry (if it exists) and start a new one
-            if (key.equals("id")) {
-                if (currentEntry.has("id")) {
-                    weatherDataList.add(currentEntry);
+            while ((line = reader.readLine()) != null) {
+                // Skip empty lines
+                if (line.trim().isEmpty()) {
+                    continue;
                 }
-                currentEntry = new JSONObject(); // Create a new JSON object for the next entry
+
+                int delimiterIndex = line.indexOf(":");
+                if (delimiterIndex == -1) {
+                    continue;
+                }
+
+                String key = line.substring(0, delimiterIndex).trim();
+                String value = line.substring(delimiterIndex + 1).trim();
+
+                if (key.equals("id")) {
+                    if (!currentEntry.isEmpty()) {
+                        weatherDataList.add(currentEntry);
+                    }
+                    currentEntry = new LinkedHashMap<>();
+                }
+
+                currentEntry.put(key, value);
             }
 
-            // Store the key-value pair in the current entry
-            currentEntry.put(key, value);
+            if (!currentEntry.isEmpty()) {
+                weatherDataList.add(currentEntry);
+            }
         }
 
-        // Add the last entry to the list
-        if (currentEntry.has("id")) {
-            weatherDataList.add(currentEntry);
-        }
-
-        reader.close();
         return weatherDataList;
     }
 
-    // Method to convert the list of weather data into a JSON array string
-    public static String convertToJSON(List<JSONObject> weatherDataList) {
-        return weatherDataList.toString();
+    public static String convertToJSON(List<Map<String, String>> weatherDataList) {
+        StringBuilder jsonBuilder = new StringBuilder("[");
+        for (int i = 0; i < weatherDataList.size(); i++) {
+            if (i > 0) {
+                jsonBuilder.append(",");
+            }
+            jsonBuilder.append(convertMapToJSON(weatherDataList.get(i)));
+        }
+        jsonBuilder.append("]");
+        return jsonBuilder.toString();
     }
 
-    // Method to strip JSON formatting and display data line-by-line
-    public static void displayWeatherData(String jsonData) {
-        try {
-            // Parse the JSON string into a JSONArray
-            JSONArray jsonArray = new JSONArray(jsonData);
-
-            // Iterate over each JSONObject in the JSONArray
-            for (int i = 0; i < jsonArray.length(); i++) {
-                JSONObject jsonObject = jsonArray.getJSONObject(i);
-
-                // Iterate over each key-value pair in the JSONObject
-                for (String key : jsonObject.keySet()) {
-                    String value = jsonObject.getString(key);
-                    System.out.println(key + ": " + value);
-                }
-
-                // Print a newline to separate different entries
-                System.out.println();
+    private static String convertMapToJSON(Map<String, String> map) {
+        StringBuilder jsonBuilder = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> entry : map.entrySet()) {
+            if (!first) {
+                jsonBuilder.append(",");
             }
-        } catch (Exception e) {
-            System.out.println("Error processing JSON data: " + e.getMessage());
+            jsonBuilder.append("\"").append(escapeJSON(entry.getKey())).append("\":\"")
+                       .append(escapeJSON(entry.getValue())).append("\"");
+            first = false;
+        }
+        jsonBuilder.append("}");
+        return jsonBuilder.toString();
+    }
+
+    private static String escapeJSON(String input) {
+        return input.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\b", "\\b")
+                    .replace("\f", "\\f")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
+    }
+
+    public static List<Map<String, String>> parseJSON(String jsonString) {
+        List<Map<String, String>> result = new ArrayList<>();
+        jsonString = jsonString.trim();
+        
+        if (jsonString.startsWith("[") && jsonString.endsWith("]")) {
+            jsonString = jsonString.substring(1, jsonString.length() - 1);
+            String[] objects = jsonString.split("\\},\\{");
+            
+            for (String obj : objects) {
+                if (!obj.startsWith("{")) obj = "{" + obj;
+                if (!obj.endsWith("}")) obj = obj + "}";
+                result.add(parseJSONObject(obj));
+            }
+        }
+        
+        return result;
+    }
+
+    private static Map<String, String> parseJSONObject(String jsonObject) {
+        Map<String, String> map = new LinkedHashMap<>();
+        jsonObject = jsonObject.substring(1, jsonObject.length() - 1);
+        String[] pairs = jsonObject.split(",");
+        
+        for (String pair : pairs) {
+            String[] keyValue = pair.split(":", 2);
+            if (keyValue.length == 2) {
+                String key = keyValue[0].trim().replace("\"", "");
+                String value = keyValue[1].trim().replace("\"", "");
+                map.put(key, value);
+            }
+        }
+        
+        return map;
+    }
+
+    public static void displayWeatherData(String jsonData) {
+        List<Map<String, String>> weatherDataList = parseJSON(jsonData);
+        
+        for (Map<String, String> entry : weatherDataList) {
+            for (Map.Entry<String, String> keyValue : entry.entrySet()) {
+                System.out.println(keyValue.getKey() + ": " + keyValue.getValue());
+            }
+            System.out.println();
         }
     }
 }

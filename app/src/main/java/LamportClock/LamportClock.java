@@ -1,24 +1,21 @@
 package LamportClock;
 
 public class LamportClock {
-    private int clock;
+    private long time;
 
     public LamportClock() {
-        this.clock = 0;
+        this.time = 0;
     }
 
-    // Increment local clock
-    public synchronized void increment() {
-        this.clock++;
+    public synchronized void tick() {
+        time++;
     }
 
-    // Update clock based on received timestamp
-    public synchronized void update(int receivedClock) {
-        this.clock = Math.max(this.clock, receivedClock) + 1;
+    public synchronized void update(long receivedTime) {
+        time = Math.max(time, receivedTime) + 1;
     }
 
-    // Get current clock value
-    public synchronized int getClock() {
-        return this.clock;
+    public synchronized long getTime() {
+        return time;
     }
 }

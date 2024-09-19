@@ -3,138 +3,169 @@ package AggregationServer;
 import java.io.*;
 import java.net.*;
 import java.util.*;
-import org.json.JSONObject;
-
+import java.util.concurrent.*;
+import java.nio.file.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import LamportClock.LamportClock;
 import JSONHandler.JSONHandler;
 
 public class AggregationServer {
-    private static final int DEFAULT_PORT = 4567;
-    private static final String DATA_FILE_PATH = "weather_data.txt";
-    private static final int DATA_EXPIRATION_TIME = 30000; // 30 seconds
-    private LamportClock lamportClock;
-    private List<JSONObject> weatherDataList;
-    private Map<String, Long> contentServerTimestamps; // Track last contact times for content servers
-    
-    public AggregationServer(int port) throws IOException {
-        this.lamportClock = new LamportClock();
-        this.weatherDataList = JSONHandler.parseWeatherData(DATA_FILE_PATH);
-        this.contentServerTimestamps = new HashMap<>();
+    private static final String STORAGE_FILE = "weather_data.json";
+    private static final long EXPIRY_TIME = 30000;
+    private final Map<String, Map<String, String>> weatherData = new ConcurrentHashMap<>();
+    private final ExecutorService threadPool = Executors.newFixedThreadPool(10);
+    private final LamportClock lamportClock = new LamportClock();
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
 
-        expireOldData();
-        
-        try (ServerSocket serverSocket = new ServerSocket(port)) { // Use try-with-resources to close serverSocket
-            System.out.println("Aggregation server started on port " + port);
-            
+    public void start(int port) throws IOException {
+        loadDataFromFile();
+        startExpiryChecker();
+
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("Aggregation Server started on port " + port);
+
             while (true) {
-                Socket clientSocket = serverSocket.accept();
-                new Thread(new ClientHandler(clientSocket)).start();
+                try {
+                    Socket clientSocket = serverSocket.accept();
+                    threadPool.execute(() -> handleClient(clientSocket));
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
     }
 
-    private class ClientHandler implements Runnable {
-        private Socket clientSocket;
+    public void handleClient(Socket clientSocket) {
+        try (
+            BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)
+        ) {
+            String requestLine = in.readLine();
+            if (requestLine != null) {
+                String[] requestParts = requestLine.split(" ");
+                String method = requestParts[0];
+                String path = requestParts[1];
 
-        public ClientHandler(Socket clientSocket) {
-            this.clientSocket = clientSocket;
-        }
-
-        @Override
-        public void run() {
-            try {
-                BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-
-                String request = in.readLine();
-                lamportClock.increment(); // Lamport clock tick
-
-                if (request.startsWith("GET")) {
+                if ("GET".equals(method)) {
                     handleGetRequest(out);
-                } else if (request.startsWith("PUT")) {
+                } else if ("PUT".equals(method)) {
                     handlePutRequest(in, out);
                 } else {
-                    sendResponse(out, "400 Bad Request", 400);
+                    sendResponse(out, 400, "Bad Request");
                 }
-                
-                clientSocket.close();
-            } catch (IOException e) {
-                e.printStackTrace();
             }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void handleGetRequest(PrintWriter out) {
+        rwLock.readLock().lock();
+        try {
+            lamportClock.tick();
+            List<Map<String, String>> currentData = new ArrayList<>(weatherData.values());
+            currentData.sort((a, b) -> Long.compare(
+                Long.parseLong(b.getOrDefault("timestamp", "0")),
+                Long.parseLong(a.getOrDefault("timestamp", "0"))
+            ));
+            String jsonResponse = JSONHandler.convertToJSON(currentData);
+            sendResponse(out, 200, jsonResponse);
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    private void handlePutRequest(BufferedReader in, PrintWriter out) throws IOException {
+        StringBuilder content = new StringBuilder();
+        String line;
+        while ((line = in.readLine()) != null && !line.isEmpty()) {
+            content.append(line);
         }
 
-        // Handle GET request
-        private void handleGetRequest(PrintWriter out) throws IOException {
-            lamportClock.increment(); // Lamport clock tick
-            String jsonData = JSONHandler.convertToJSON(weatherDataList);
-            sendResponse(out, jsonData, 200);
-        }
-
-        // Handle PUT request
-        private void handlePutRequest(BufferedReader in, PrintWriter out) throws IOException {
-            StringBuilder putData = new StringBuilder();
-            String line;
-            while ((line = in.readLine()) != null && !line.isEmpty()) {
-                putData.append(line).append("\n");
-            }
-            
-            lamportClock.increment(); // Lamport clock tick
+        List<Map<String, String>> dataList = JSONHandler.parseJSON(content.toString());
+        if (!dataList.isEmpty()) {
+            Map<String, String> data = dataList.get(0);
+            rwLock.writeLock().lock();
             try {
-                // Parse and validate the incoming weather data
-                List<JSONObject> newWeatherData = JSONHandler.parseWeatherData(DATA_FILE_PATH);
-                if (newWeatherData.isEmpty()) {
-                    sendResponse(out, "204 No Content", 204);
-                    return;
-                }
-
-                // Update internal storage with new data
-                weatherDataList.addAll(newWeatherData);
+                lamportClock.update(Long.parseLong(data.getOrDefault("timestamp", "0")));
+                lamportClock.tick();
+                data.put("timestamp", String.valueOf(lamportClock.getTime()));
+                data.put("lastUpdateTime", String.valueOf(System.currentTimeMillis()));
+                String id = data.get("id");
+                boolean isNewEntry = !weatherData.containsKey(id);
+                weatherData.put(id, data);
                 saveDataToFile();
-                
-                // Update content server's timestamp for expiration tracking
-                String contentServerId = newWeatherData.get(0).getString("id");
-                contentServerTimestamps.put(contentServerId, System.currentTimeMillis());
-
-                // Respond with appropriate status code
-                if (weatherDataList.size() == 1) {
-                    sendResponse(out, "201 Created", 201); // First data received
-                } else {
-                    sendResponse(out, "200 OK", 200); // Update received
-                }
-            } catch (Exception e) {
-                sendResponse(out, "500 Internal Server Error", 500); // Invalid data
+                sendResponse(out, isNewEntry ? 201 : 200, "Data updated successfully");
+            } finally {
+                rwLock.writeLock().unlock();
             }
+        } else {
+            sendResponse(out, 204, "No Content");
         }
     }
 
-    // Save weather data to a file
-    private void saveDataToFile() throws IOException {
-        try (PrintWriter writer = new PrintWriter(new FileWriter(DATA_FILE_PATH))) {
-            for (JSONObject entry : weatherDataList) {
-                writer.println(entry.toString());
-            }
-        }
-    }
-
-    // Send a response to the client
-    private void sendResponse(PrintWriter out, String message, int statusCode) {
-        out.println("HTTP/1.1 " + statusCode + " " + message);
-        out.println("Lamport-Clock: " + lamportClock.getClock());
+    private void sendResponse(PrintWriter out, int statusCode, String body) {
+        out.println("HTTP/1.1 " + statusCode);
+        out.println("Content-Type: application/json");
+        out.println("Lamport-Clock: " + lamportClock.getTime());
         out.println();
+        out.println(body);
     }
 
-    // Check and expire outdated weather data
-    private void expireOldData() {
-        long currentTime = System.currentTimeMillis();
-        weatherDataList.removeIf(entry -> {
-            String contentServerId = entry.getString("id");
-            Long lastUpdateTime = contentServerTimestamps.get(contentServerId);
-            return lastUpdateTime != null && (currentTime - lastUpdateTime > DATA_EXPIRATION_TIME);
-        });
+    private void loadDataFromFile() {
+        rwLock.writeLock().lock();
+        try {
+            Path path = Paths.get(STORAGE_FILE);
+            if (Files.exists(path)) {
+                String content = new String(Files.readAllBytes(path));
+                List<Map<String, String>> dataList = JSONHandler.parseJSON(content);
+                for (Map<String, String> data : dataList) {
+                    weatherData.put(data.get("id"), data);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
-    public static void main(String[] args) throws IOException {
-        int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
-        new AggregationServer(port);
+    private void saveDataToFile() {
+        rwLock.readLock().lock();
+        try {
+            List<Map<String, String>> dataList = new ArrayList<>(weatherData.values());
+            String jsonContent = JSONHandler.convertToJSON(dataList);
+            Files.write(Paths.get(STORAGE_FILE), jsonContent.getBytes());
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    private void startExpiryChecker() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(this::removeExpiredData, EXPIRY_TIME, EXPIRY_TIME, TimeUnit.MILLISECONDS);
+    }
+
+    private void removeExpiredData() {
+        rwLock.writeLock().lock();
+        try {
+            long currentTime = System.currentTimeMillis();
+            weatherData.entrySet().removeIf(entry ->
+                currentTime - Long.parseLong(entry.getValue().getOrDefault("lastUpdateTime", "0")) > EXPIRY_TIME);
+            saveDataToFile();
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    public static void main(String[] args) {
+        int port = args.length > 0 ? Integer.parseInt(args[0]) : 4567;
+        try {
+            new AggregationServer().start(port);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
