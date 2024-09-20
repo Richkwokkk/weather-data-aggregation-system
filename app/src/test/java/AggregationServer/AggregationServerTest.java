@@ -85,6 +85,23 @@ class AggregationServerTest {
     }
 
     @Test
+    void testHandleInvalidRequest() throws IOException {
+        Socket mockSocket = Mockito.mock(Socket.class);
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        when(mockSocket.getOutputStream()).thenReturn(outputStream);
+        
+        BufferedReader mockReader = Mockito.mock(BufferedReader.class);
+        when(mockReader.readLine()).thenReturn("INVALID REQUEST", "");
+        
+        when(mockSocket.getInputStream()).thenReturn(new ByteArrayInputStream("".getBytes()));
+
+        server.handleClient(mockSocket);
+
+        String response = outputStream.toString();
+        assertTrue(response.contains("HTTP/1.1 400"));
+    }
+
+    @Test
     void testDataExpiry() throws InterruptedException, IOException {
         // Add test data
         String jsonData = "[{\"id\":\"ABC123\",\"temperature\":\"25.5\",\"humidity\":\"60%\",\"lastUpdateTime\":\"" + 
