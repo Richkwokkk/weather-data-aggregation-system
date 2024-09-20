@@ -93,7 +93,8 @@ class AggregationServerTest {
 
         server = new AggregationServer();
 
-        Thread.sleep(1000);
+        // Wait for the expiry mechanism to run
+        Thread.sleep(35000);
 
         Socket mockSocket = Mockito.mock(Socket.class);
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();

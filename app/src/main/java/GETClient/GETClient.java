@@ -11,12 +11,16 @@ public class GETClient {
     private static final int RETRY_DELAY = 5000;
     private final LamportClock lamportClock = new LamportClock();
 
+    protected HttpURLConnection createConnection(String serverUrl) throws IOException {
+        URI uri = URI.create(serverUrl);
+        return (HttpURLConnection) uri.toURL().openConnection();
+    }
+
     public void getWeatherData(String serverUrl, String stationId) {
         int retries = 0;
         while (retries < MAX_RETRIES) {
             try {
-                URI uri = URI.create(serverUrl);
-                HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+                HttpURLConnection connection = createConnection(serverUrl);
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Lamport-Clock", String.valueOf(lamportClock.getTime()));
 
@@ -65,10 +69,10 @@ public class GETClient {
         System.out.println("Current Weather Data:");
         for (Map<String, String> data : weatherDataList) {
             if (stationId == null || stationId.equals(data.get("id"))) {
+                System.out.println("--------------------");
                 for (Map.Entry<String, String> entry : data.entrySet()) {
                     System.out.println(entry.getKey() + ": " + entry.getValue());
                 }
-                System.out.println("--------------------");
             }
         }
     }

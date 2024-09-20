@@ -11,7 +11,7 @@ import JSONHandler.JSONHandler;
 
 public class AggregationServer {
     private static final String STORAGE_FILE = "weather_data.json";
-    private static final long EXPIRY_TIME = 30000;
+    private static final long EXPIRY_TIME = 30000; // 30 seconds
     private final Map<String, Map<String, String>> weatherData = new ConcurrentHashMap<>();
     private final ExecutorService threadPool = Executors.newFixedThreadPool(10);
     private final LamportClock lamportClock = new LamportClock();
@@ -152,9 +152,13 @@ public class AggregationServer {
         rwLock.writeLock().lock();
         try {
             long currentTime = System.currentTimeMillis();
-            weatherData.entrySet().removeIf(entry ->
-                currentTime - Long.parseLong(entry.getValue().getOrDefault("lastUpdateTime", "0")) > EXPIRY_TIME);
-            saveDataToFile();
+            boolean dataRemoved = weatherData.entrySet().removeIf(entry -> {
+                long lastUpdateTime = Long.parseLong(entry.getValue().getOrDefault("lastUpdateTime", "0"));
+                return currentTime - lastUpdateTime > EXPIRY_TIME;
+            });
+            if (dataRemoved) {
+                saveDataToFile();
+            }
         } finally {
             rwLock.writeLock().unlock();
         }

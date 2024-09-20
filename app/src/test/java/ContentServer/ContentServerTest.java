@@ -19,30 +19,31 @@ class ContentServerTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        // Create a temporary file with test weather data
         String testData = "id: ABC123\n" +
                           "name: Test Station\n" +
                           "temperature: 25.5\n" +
                           "humidity: 60";
         Files.write(Paths.get(TEST_FILE_PATH), testData.getBytes());
 
-        contentServer = new ContentServer(TEST_SERVER_URL, TEST_FILE_PATH);
+        contentServer = new ContentServer(TEST_SERVER_URL, TEST_FILE_PATH) {
+            @Override
+            protected HttpURLConnection createConnection(String url) throws IOException {
+                return mock(HttpURLConnection.class);
+            }
+        };
     }
 
     @AfterEach
     void tearDown() throws IOException {
-        // Delete the temporary file
         Files.deleteIfExists(Paths.get(TEST_FILE_PATH));
     }
 
     @Test
     void testLoadWeatherData() throws Exception {
-        // Use reflection to access private method
         java.lang.reflect.Method loadWeatherDataMethod = ContentServer.class.getDeclaredMethod("loadWeatherData");
         loadWeatherDataMethod.setAccessible(true);
         loadWeatherDataMethod.invoke(contentServer);
 
-        // Use reflection to access private field
         java.lang.reflect.Field weatherDataField = ContentServer.class.getDeclaredField("weatherData");
         weatherDataField.setAccessible(true);
         @SuppressWarnings("unchecked")
@@ -57,33 +58,23 @@ class ContentServerTest {
 
     @Test
     void testSendUpdate() throws Exception {
-        // Mock HttpURLConnection
         HttpURLConnection mockConnection = mock(HttpURLConnection.class);
-        URL mockUrl = mock(URL.class);
-        URLStreamHandler handler = new URLStreamHandler() {
-            @Override
-            protected URLConnection openConnection(URL u) {
-                return mockConnection;
-            }
-        };
-        URL url = URL.of(new URI("http://localhost:8080"), handler);
-
-        // Set up mock behavior
         when(mockConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
         when(mockConnection.getOutputStream()).thenReturn(new ByteArrayOutputStream());
         when(mockConnection.getHeaderField("Lamport-Clock")).thenReturn("1");
 
-        // Use reflection to access private method
-        java.lang.reflect.Method sendUpdateMethod = ContentServer.class.getDeclaredMethod("sendUpdate");
-        sendUpdateMethod.setAccessible(true);
+        ContentServer spyContentServer = spy(contentServer);
+        spyContentServer.setMaxRetries(1);
 
-        // Execute the method
-        sendUpdateMethod.invoke(contentServer);
+        doReturn(mockConnection).when(spyContentServer).createConnection(anyString());
 
-        // Verify that the connection was properly configured
-        verify(mockConnection).setRequestMethod("PUT");
-        verify(mockConnection).setDoOutput(true);
-        verify(mockConnection).setRequestProperty("Content-Type", "application/json");
-        verify(mockConnection).setRequestProperty(eq("Lamport-Clock"), anyString());
+        spyContentServer.testSendUpdate();
+
+        verify(mockConnection, times(1)).setRequestMethod("PUT");
+        verify(mockConnection, times(1)).setDoOutput(true);
+        verify(mockConnection, times(1)).setRequestProperty("Content-Type", "application/json");
+        verify(mockConnection, times(1)).setRequestProperty(eq("Lamport-Clock"), anyString());
+
+        verify(spyContentServer, times(1)).createConnection(anyString());
     }
 }

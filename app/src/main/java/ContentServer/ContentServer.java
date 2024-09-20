@@ -10,8 +10,7 @@ import JSONHandler.JSONHandler;
 
 public class ContentServer {
     private static final int UPDATE_INTERVAL = 15000;
-    private static final int MAX_RETRIES = 3;
-    private static final int RETRY_DELAY = 5000; // 5 seconds
+    private static final int RETRY_DELAY = 5000;
     private final LamportClock lamportClock = new LamportClock();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
@@ -44,12 +43,21 @@ public class ContentServer {
         }
     }
 
+    protected HttpURLConnection createConnection(String url) throws IOException {
+        return (HttpURLConnection) URI.create(url).toURL().openConnection();
+    }
+
+    private int maxRetries = 3;
+
+    public void setMaxRetries(int maxRetries) {
+        this.maxRetries = maxRetries;
+    }
+
     private void sendUpdate() {
         int retries = 0;
-        while (retries < MAX_RETRIES) {
+        while (retries < maxRetries) {
             try {
-                URI uri = URI.create(serverUrl);
-                HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+                HttpURLConnection connection = createConnection(serverUrl);
                 connection.setRequestMethod("PUT");
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json");
@@ -85,7 +93,7 @@ public class ContentServer {
             }
 
             retries++;
-            if (retries < MAX_RETRIES) {
+            if (retries < maxRetries) {
                 System.out.println("Retrying in " + RETRY_DELAY / 1000 + " seconds...");
                 try {
                     Thread.sleep(RETRY_DELAY);
@@ -95,8 +103,8 @@ public class ContentServer {
             }
         }
 
-        if (retries == MAX_RETRIES) {
-            System.out.println("Failed to send update after " + MAX_RETRIES + " attempts.");
+        if (retries == maxRetries) {
+            System.out.println("Failed to send update after " + maxRetries + " attempts.");
         }
     }
 
@@ -107,4 +115,9 @@ public class ContentServer {
         }
         new ContentServer(args[0], args[1]).start();
     }
+
+    public void testSendUpdate() {
+        sendUpdate();
+    }
+    
 }
