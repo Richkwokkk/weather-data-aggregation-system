@@ -7,8 +7,7 @@
 
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
-    application
-    jacoco
+    id 'application'
 }
 
 repositories {
@@ -18,16 +17,18 @@ repositories {
 
 dependencies {
     // Use JUnit Jupiter for testing.
-    testImplementation(libs.junit.jupiter)
+    testImplementation libs.junit.jupiter
 
-    testImplementation("org.mockito:mockito-core:5.3.1")
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.8.2'
 
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation 'org.mockito:mockito-core:4.0.0'
+
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
     // This dependency is used by the application.
-    implementation(libs.guava)
+    implementation libs.guava
 
-    implementation("org.json:json:20210307")
+    implementation 'org.json:json:20210307'
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
@@ -39,25 +40,10 @@ java {
 
 application {
     // Define the main class for the application.
-    mainClass = "a2_aggregation_server.App"
+    mainClass = 'a2_aggregation_server.App'
 }
 
-tasks.named<Test>("test") {
+tasks.named('test') {
     // Use JUnit Platform for unit tests.
     useJUnitPlatform()
-}
-
-tasks.test {
-    finalizedBy(tasks.jacocoTestReport)
-    testLogging {
-        events("passed", "skipped", "failed")
-    }
-}
-
-tasks.jacocoTestReport {
-    dependsOn(tasks.test)
-    reports {
-        xml.required.set(true)
-        html.required.set(true)
-    }
 }
