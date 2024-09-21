@@ -63,17 +63,27 @@ public class AggregationServer {
         rwLock.readLock().lock();
         try {
             lamportClock.tick();
+            System.out.println("Handling GET request. Current Lamport Clock: " + lamportClock.getTime());
+            System.out.println("Current weather data size: " + weatherData.size());
+            
             List<Map<String, String>> currentData = new ArrayList<>(weatherData.values());
-            currentData.sort((a, b) -> Long.compare(
-                Long.parseLong(b.getOrDefault("timestamp", "0")),
-                Long.parseLong(a.getOrDefault("timestamp", "0"))
-            ));
-            String jsonResponse = JSONHandler.convertToJSON(currentData);
-            sendResponse(out, 200, jsonResponse);
+            if (currentData.isEmpty()) {
+                System.out.println("Weather data is empty.");
+                sendResponse(out, 200, "[]");  // Return empty array for no data
+            } else {
+                currentData.sort((a, b) -> Long.compare(
+                    Long.parseLong(b.getOrDefault("timestamp", "0")),
+                    Long.parseLong(a.getOrDefault("timestamp", "0"))
+                ));
+                String jsonResponse = JSONHandler.convertToJSON(currentData);
+                sendResponse(out, 200, jsonResponse);
+            }
         } finally {
             rwLock.readLock().unlock();
         }
     }
+    
+    
 
     private void handlePutRequest(BufferedReader in, PrintWriter out) throws IOException {
         StringBuilder content = new StringBuilder();
@@ -110,7 +120,10 @@ public class AggregationServer {
         out.println("Lamport-Clock: " + lamportClock.getTime());
         out.println();
         out.println(body);
+        out.flush();
+        out.close();
     }
+    
 
     private void loadDataFromFile() {
         rwLock.writeLock().lock();
@@ -135,6 +148,7 @@ public class AggregationServer {
         try {
             List<Map<String, String>> dataList = new ArrayList<>(weatherData.values());
             String jsonContent = JSONHandler.convertToJSON(dataList);
+            System.out.println("Saving data to file: " + jsonContent); // Log the content being saved
             Files.write(Paths.get(STORAGE_FILE), jsonContent.getBytes());
         } catch (IOException e) {
             e.printStackTrace();

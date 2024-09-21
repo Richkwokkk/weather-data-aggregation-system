@@ -7,6 +7,7 @@ import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -16,9 +17,29 @@ class AggregationServerTest {
     private AggregationServer server;
     private ExecutorService mockThreadPool;
     private static final String TEST_STORAGE_FILE = "test_weather_data.json";
+    private Path tempFile;
+
+    private void createTestFile() {
+        try {
+            Path path = Paths.get(System.getProperty("user.dir"), "test_weather_data.json").toAbsolutePath();
+            System.out.println("Attempting to create test file at: " + path);
+            if (!Files.exists(path)) {
+                Files.write(path, "[]".getBytes());
+                System.out.println("Created test file at: " + path);
+            } else {
+                System.out.println("Test file already exists at: " + path);
+            }
+        } catch (IOException e) {
+            System.err.println("Error creating test file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
+        createTestFile();
+        Path path = Paths.get(System.getProperty("user.dir"), "test_weather_data.json").toAbsolutePath();
+        assertTrue(Files.exists(path), "Test file should exist after setup");
         server = new AggregationServer();
         mockThreadPool = Mockito.mock(ExecutorService.class);
         try {
@@ -28,11 +49,13 @@ class AggregationServerTest {
         } catch (Exception e) {
             e.printStackTrace();
         }
+        tempFile = Files.createTempFile("test_weather_data", ".json");
     }
 
     @AfterEach
     void tearDown() throws IOException {
-        Files.deleteIfExists(Paths.get(TEST_STORAGE_FILE));
+        Path path = Paths.get(System.getProperty("user.dir"), "test_weather_data.json").toAbsolutePath();
+        Files.deleteIfExists(path);
     }
 
     @Test
@@ -46,12 +69,18 @@ class AggregationServerTest {
         
         when(mockSocket.getInputStream()).thenReturn(new ByteArrayInputStream("".getBytes()));
 
-        server.handleClient(mockSocket);
+        try {
+            server.handleClient(mockSocket);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
         String response = outputStream.toString();
-        assertTrue(response.contains("HTTP/1.1 200"));
-        assertTrue(response.contains("Content-Type: application/json"));
-        assertTrue(response.contains("Lamport-Clock:"));
+        System.out.println("Response: " + response);
+
+        assertTrue(response.contains("HTTP/1.1 200"), "Expected HTTP status 200");
+        assertTrue(response.contains("Content-Type: application/json"), "Expected Content-Type application/json");
+        assertTrue(response.contains("Lamport-Clock:"), "Expected Lamport-Clock header");
     }
 
     @Test
@@ -128,7 +157,7 @@ class AggregationServerTest {
     void testConcurrentRequests() throws InterruptedException, IOException {
         int numThreads = 10;
         Thread[] threads = new Thread[numThreads];
-        
+
         for (int i = 0; i < numThreads; i++) {
             final int threadNum = i;
             threads[i] = new Thread(() -> {
@@ -136,7 +165,7 @@ class AggregationServerTest {
                     Socket mockSocket = Mockito.mock(Socket.class);
                     ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
                     when(mockSocket.getOutputStream()).thenReturn(outputStream);
-                    
+
                     String jsonData = "{\"id\":\"ABC" + threadNum + "\",\"temperature\":\"25.5\",\"humidity\":\"60%\"}";
                     BufferedReader mockReader = Mockito.mock(BufferedReader.class);
                     when(mockReader.readLine())
@@ -146,10 +175,11 @@ class AggregationServerTest {
                                     "",
                                     jsonData,
                                     null);
-                    
+
                     when(mockSocket.getInputStream()).thenReturn(new ByteArrayInputStream(jsonData.getBytes()));
 
                     server.handleClient(mockSocket);
+                    System.out.println("Thread " + threadNum + " processed data: " + jsonData); // Log processed data
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -161,9 +191,12 @@ class AggregationServerTest {
             thread.join();
         }
 
-        String storedData = new String(Files.readAllBytes(Paths.get(TEST_STORAGE_FILE)));
+        // Read the stored data after all threads have completed
+        String storedData = new String(Files.readAllBytes(tempFile));
+        System.out.println("Stored Data: " + storedData); // Debugging line
+
         for (int i = 0; i < numThreads; i++) {
-            assertTrue(storedData.contains("ABC" + i));
+            assertTrue(storedData.contains("ABC" + i), "Data for ABC" + i + " should be present");
         }
     }
 }
