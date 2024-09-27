@@ -32,7 +32,7 @@ public class AggregationServerTest {
     @Test
     public void testStoreWithInvalidDummyData() {
         JSONObject jsonData = new JSONObject();
-        jsonData.put("value", "data3"); // Missing "id"
+        jsonData.put("value", "data3");
 
         server.store(jsonData);
         Assertions.assertFalse(server.getDataStorage().has(""));
