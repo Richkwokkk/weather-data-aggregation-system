@@ -4,6 +4,7 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ContentServer {
     private static LamportClock clock = new LamportClock();
@@ -15,6 +16,8 @@ public class ContentServer {
     private String address;
     private int port = 8080;
     private boolean testMode = false;
+    private static final CopyOnWriteArrayList<ContentServer> serverInstances = new CopyOnWriteArrayList<>();
+    private static final int MAX_SERVERS = 3;
 
     private List<String> readFile() throws IOException {
         try {
@@ -181,6 +184,37 @@ public class ContentServer {
         }
     }
 
+    public static void addServerInstance(ContentServer server) {
+        if (serverInstances.size() < MAX_SERVERS) {
+            serverInstances.add(server);
+        }
+    }
+
+    public static void removeServerInstance(ContentServer server) {
+        serverInstances.remove(server);
+    }
+
+    public static void sendDataToAllServers(List<JSONObject> jsonList) throws IOException {
+        int failedServers = 0;
+        IOException lastException = null;
+
+        for (ContentServer server : serverInstances) {
+            try {
+                server.sendJsons(new ArrayList<>(jsonList));
+            } catch (IOException e) {
+                System.err.println("Failed to send data to server: " + e.getMessage());
+                failedServers++;
+                lastException = e;
+            }
+        }
+        
+        if (failedServers == serverInstances.size() && !serverInstances.isEmpty()) {
+            throw new IOException("All servers failed to process the request", lastException);
+        } else if (failedServers > 0) {
+            System.err.println("Failed to send data to " + failedServers + " server(s)");
+        }
+    }
+
     public static void main(String[] args) {
         if (args.length < 2) {
             System.out.println("Not enough arguments...");
@@ -208,6 +242,28 @@ public class ContentServer {
             return;
         }
 
-        new ContentServer(address, port, filepath);
+        for (int i = 0; i < MAX_SERVERS; i++) {
+            ContentServer server = new ContentServer(address, port + i, filepath);
+            addServerInstance(server);
+        }
+
+        try {
+            List<String> jsonStrings = serverInstances.get(0).readFile();
+            List<JSONObject> jsonList = jsonStrings.stream()
+                .map(JSONObject::new)
+                .collect(Collectors.toList());
+            sendDataToAllServers(jsonList);
+        } catch (IOException e) {
+            System.err.println("Error processing data: " + e.getMessage());
+        }
     }
+
+    public static void clearServerInstances() {
+        serverInstances.clear();
+    }
+
+    public static int getServerInstancesCount() {
+        return serverInstances.size();
+    }
+
 }

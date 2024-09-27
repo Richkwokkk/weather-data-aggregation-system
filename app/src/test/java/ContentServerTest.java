@@ -12,6 +12,7 @@ import java.nio.file.Paths;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ContentServerTest {
     private ContentServer contentServer;
@@ -39,12 +40,18 @@ public class ContentServerTest {
             "  \"wind_dir\": \"S\"\n" +
             "}";
         Files.write(testFile, jsonContent.getBytes());
+
+        // Clear existing server instances
+        ContentServer.clearServerInstances();
     }
 
     @AfterEach
     void cleanup() {
         new File(invalidFilePath).delete();
         new File(testFilePath).delete();
+
+        // Clear server instances after each test
+        ContentServer.clearServerInstances();
     }
 
     @Test
@@ -95,5 +102,110 @@ public class ContentServerTest {
         Assertions.assertThrows(IOException.class, () -> {
             invalidContentServer.sendData();
         });
+    }
+
+    @Test
+    public void testAddServerInstance() {
+        ContentServer server1 = new ContentServer(testAddress, testPort, testFilePath);
+        ContentServer server2 = new ContentServer(testAddress, testPort + 1, testFilePath);
+        ContentServer server3 = new ContentServer(testAddress, testPort + 2, testFilePath);
+        ContentServer server4 = new ContentServer(testAddress, testPort + 3, testFilePath);
+
+        ContentServer.addServerInstance(server1);
+        ContentServer.addServerInstance(server2);
+        ContentServer.addServerInstance(server3);
+        ContentServer.addServerInstance(server4);
+
+        assertEquals(3, ContentServer.getServerInstancesCount(), "Should only add up to MAX_SERVERS instances");
+    }
+
+    @Test
+    public void testRemoveServerInstance() {
+        ContentServer server1 = new ContentServer(testAddress, testPort, testFilePath);
+        ContentServer server2 = new ContentServer(testAddress, testPort + 1, testFilePath);
+
+        ContentServer.addServerInstance(server1);
+        ContentServer.addServerInstance(server2);
+
+        assertEquals(2, ContentServer.getServerInstancesCount());
+
+        ContentServer.removeServerInstance(server1);
+
+        assertEquals(1, ContentServer.getServerInstancesCount());
+    }
+
+    @Test
+    public void testSendDataToAllServers() throws IOException {
+        ContentServer server1 = Mockito.spy(new ContentServer(testAddress, testPort, testFilePath));
+        ContentServer server2 = Mockito.spy(new ContentServer(testAddress, testPort + 1, testFilePath));
+        ContentServer server3 = Mockito.spy(new ContentServer(testAddress, testPort + 2, testFilePath));
+
+        Mockito.doNothing().when(server1).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.doNothing().when(server2).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.doNothing().when(server3).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+
+        ContentServer.addServerInstance(server1);
+        ContentServer.addServerInstance(server2);
+        ContentServer.addServerInstance(server3);
+
+        List<JSONObject> testData = new ArrayList<>();
+        testData.add(new JSONObject("{\"test\": \"data\"}"));
+
+        ContentServer.sendDataToAllServers(testData);
+
+        Mockito.verify(server1, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server2, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server3, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+    }
+
+    @Test
+    public void testSendDataToAllServersWithFailure() throws IOException {
+        ContentServer server1 = Mockito.mock(ContentServer.class);
+        ContentServer server2 = Mockito.mock(ContentServer.class);
+        ContentServer server3 = Mockito.mock(ContentServer.class);
+
+        Mockito.doThrow(new IOException("Simulated failure")).when(server1).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.doThrow(new IOException("Simulated failure")).when(server2).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        // server3 will succeed
+        Mockito.doNothing().when(server3).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+
+        ContentServer.clearServerInstances();
+        ContentServer.addServerInstance(server1);
+        ContentServer.addServerInstance(server2);
+        ContentServer.addServerInstance(server3);
+
+        List<JSONObject> testData = new ArrayList<>();
+        testData.add(new JSONObject("{\"test\": \"data\"}"));
+
+        assertDoesNotThrow(() -> ContentServer.sendDataToAllServers(testData));
+
+        Mockito.verify(server1, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server2, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server3, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+    }
+
+    @Test
+    public void testSendDataToAllServersAllFail() throws IOException {
+        ContentServer server1 = Mockito.spy(new ContentServer(testAddress, testPort, testFilePath));
+        ContentServer server2 = Mockito.spy(new ContentServer(testAddress, testPort + 1, testFilePath));
+        ContentServer server3 = Mockito.spy(new ContentServer(testAddress, testPort + 2, testFilePath));
+
+        Mockito.doThrow(new IOException("Simulated failure")).when(server1).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.doThrow(new IOException("Simulated failure")).when(server2).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.doThrow(new IOException("Simulated failure")).when(server3).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+
+        ContentServer.clearServerInstances();
+        ContentServer.addServerInstance(server1);
+        ContentServer.addServerInstance(server2);
+        ContentServer.addServerInstance(server3);
+
+        List<JSONObject> testData = new ArrayList<>();
+        testData.add(new JSONObject("{\"test\": \"data\"}"));
+
+        assertThrows(IOException.class, () -> ContentServer.sendDataToAllServers(testData));
+
+        Mockito.verify(server1, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server2, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
+        Mockito.verify(server3, Mockito.times(1)).sendJsons(Mockito.<ArrayList<JSONObject>>any());
     }
 }
