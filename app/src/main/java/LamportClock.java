@@ -23,14 +23,23 @@ public class LamportClock {
         return value;
     }
 
-    public void log(String eventName) throws SecurityException, IOException {
+    public void log(String eventName) {
         Logger logger = Logger.getLogger("lamportlogger");
         String logFilePath = Paths.get("logs", this.time + ".log").toString();
-        FileHandler handler = new FileHandler(logFilePath, true);
-        logger.addHandler(handler);
-        logger.setUseParentHandlers(false);
-        SimpleFormatter formatter = new SimpleFormatter();
-        handler.setFormatter(formatter);
-        logger.info(eventName + " " + value);
+        FileHandler handler = null;
+        try {
+            handler = new FileHandler(logFilePath, true);
+            logger.addHandler(handler);
+            logger.setUseParentHandlers(false);
+            SimpleFormatter formatter = new SimpleFormatter();
+            handler.setFormatter(formatter);
+            logger.info(eventName + " " + value);
+        } catch (IOException e) {
+            System.err.println("Failed to log event: " + e.getMessage());
+        } finally {
+            if (handler != null) {
+                handler.close();
+            }
+        }
     }
 }

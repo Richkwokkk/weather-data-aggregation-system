@@ -2,6 +2,8 @@ import java.io.*;
 import java.net.*;
 import org.json.JSONObject;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class ContentServer {
     private static LamportClock clock = new LamportClock();
@@ -12,105 +14,170 @@ public class ContentServer {
     private String filePath;
     private String address;
     private int port = 8080;
+    private boolean testMode = false;
 
-    private static ArrayList<JSONObject> readFile(String filepath) {
-        ArrayList<JSONObject> resultList = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(filepath))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.isEmpty()) continue;
+    private List<String> readFile() throws IOException {
+        try {
+            JSONObject currentData = new JSONObject();
+            List<JSONObject> resultList = new ArrayList<>();
+            try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty() || line.equals("{") || line.equals("}")) continue;
 
-                JSONObject currentData = new JSONObject();
-                String[] tokens = line.split(":", 2);
-                currentData.put(tokens[0], tokens[1]);
+                    if (line.endsWith(",")) {
+                        line = line.substring(0, line.length() - 1);
+                    }
 
-                while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                    tokens = line.split(":", 2);
-                    if (tokens[0].equalsIgnoreCase("id")) break;
-                    currentData.put(tokens[0], tokens[1]);
+                    String[] tokens = line.split(":", 2);
+                    if (tokens.length < 2) {
+                        continue;
+                    }
+
+                    String key = tokens[0].replaceAll("\"", "").trim();
+                    String value = tokens[1].replaceAll("\"", "").trim();
+
+                    if (key.equalsIgnoreCase("id") && !currentData.isEmpty()) {
+                        resultList.add(new JSONObject(currentData.toString()));
+                        currentData = new JSONObject();
+                    }
+
+                    currentData.put(key, value);
                 }
 
-                if (currentData.length() > 0) {
-                    resultList.add(currentData);
+                if (!currentData.isEmpty()) {
+                    resultList.add(new JSONObject(currentData.toString()));
                 }
+
+                return resultList.stream()
+                    .map(JSONObject::toString)
+                    .collect(Collectors.toList());
             }
-            return resultList;
-        } catch (IOException e) {
-            System.out.println(e);
+        } catch (Exception e) {
+            throw new IOException("Invalid file format", e);
         }
-        return null;
+    }
+
+    public List<String> readFilePublic(String filePath) throws IOException {
+        this.filePath = filePath;
+        return readFile();
     }
 
     public void sendJsons(ArrayList<JSONObject> jsonList) throws IOException {
+        if (jsonList == null || jsonList.isEmpty()) {
+            System.out.println("No valid JSON data to send.");
+            return;
+        }
+
         int length = jsonList.size();
         int retries = 0;
 
         for (int i = 0; i < length; i++) {
-            socket = new Socket(address, port);
-            socket.setSoTimeout(5000);
-            System.out.println("Connected");
+            try (Socket socket = new Socket(address, port)) {
+                socket.setSoTimeout(5000);
+                System.out.println("Connected");
 
-            JSONObject currentJSON = jsonList.get(i);
-            clock.tick();
-            clock.log("ContentServer: sending PUT");
+                JSONObject currentJSON = jsonList.get(i);
+                clock.tick();
+                clock.log("ContentServer: sending PUT");
 
-            try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
-                 BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
+                try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+                     BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-                if (currentJSON.getString("id").length() < 2) {
-                    System.out.println("Invalid entry, id is empty");
-                    continue;
-                }
+                    if (currentJSON.getString("id").length() < 2) {
+                        System.out.println("Invalid entry, id is empty");
+                        continue;
+                    }
 
-                String request = "PUT /weather.json HTTP/1.1\r\n" +
-                        "Content-Type: application/json\r\n" +
-                        "Content-Length: " + currentJSON.toString().length() + "\r\n" +
-                        "Lamport-Clock: " + clock.getValue() + "\r\n";
-                writer.write(request);
-                writer.write(currentJSON.toString());
-                writer.write("\r\n");
-                writer.flush();
+                    String request = "PUT /weather.json HTTP/1.1\r\n" +
+                            "Content-Type: application/json\r\n" +
+                            "Content-Length: " + currentJSON.toString().length() + "\r\n" +
+                            "Lamport-Clock: " + clock.getValue() + "\r\n";
+                    writer.write(request);
+                    writer.write(currentJSON.toString());
+                    writer.write("\r\n");
+                    writer.flush();
 
-                Thread.sleep(1000);
+                    Thread.sleep(1000);
 
-                String ret = reader.readLine();
-                String[] split = ret.trim().split(" ", 3);
-                int returnCode = Integer.parseInt(split[1]);
+                    String ret = reader.readLine();
+                    String[] split = ret.trim().split(" ", 3);
+                    int returnCode = Integer.parseInt(split[1]);
 
-                while ((ret = reader.readLine()) != null && !ret.isEmpty()) {
-                    if (ret.startsWith("Lamport-Clock:")) {
-                        String[] tokens = ret.split(":", 2);
-                        clock.update(Integer.parseInt(tokens[1].trim()));
-                        clock.log("ContentServer: receive response");
+                    while ((ret = reader.readLine()) != null && !ret.isEmpty()) {
+                        if (ret.startsWith("Lamport-Clock:")) {
+                            String[] tokens = ret.split(":", 2);
+                            clock.update(Integer.parseInt(tokens[1].trim()));
+                            clock.log("ContentServer: receive response");
+                        }
+                    }
+
+                    if (returnCode != 200 && returnCode != 201) {
+                        i--;
+                        Thread.sleep(1000);
+                    }
+                } catch (IOException | InterruptedException e) {
+                    i--;
+                    retries++;
+                    if (retries > 3) {
+                        System.out.println("Connection failed after 3 retries");
+                        throw new IOException("Connection failed after 3 retries", e);
+                    }
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e1) {
+                        Thread.currentThread().interrupt();
                     }
                 }
-
-                if (returnCode != 200 && returnCode != 201) {
-                    i--;
-                    Thread.sleep(1000);
+            } catch (IOException e) {
+                System.out.println("Connection failed: " + e.getMessage());
+                if (testMode) {
+                    System.out.println("Test mode: Continuing despite connection failure");
+                    continue;
                 }
-            } catch (IOException | InterruptedException e) {
-                i--;
                 retries++;
                 if (retries > 3) {
-                    System.out.println("Connection lost");
-                    break;
+                    throw new IOException("Connection failed after 3 retries", e);
                 }
-            } finally {
-                socket.close();
+                i--;
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
+    }
+
+    public void setSocket(Socket socket) {
+        this.socket = socket;
     }
 
     public ContentServer(String address, int port, String filePath) {
         this.address = address;
         this.port = port;
         this.filePath = filePath;
-        ArrayList<JSONObject> jsonList = readFile(filePath);
-        try {
+    }
+
+    public void setTestMode(boolean testMode) {
+        this.testMode = testMode;
+    }
+
+    public void sendData() throws IOException {
+        List<String> jsonStrings = readFile();
+        if (jsonStrings != null && !jsonStrings.isEmpty()) {
+            ArrayList<JSONObject> jsonList = new ArrayList<>();
+            for (String jsonString : jsonStrings) {
+                try {
+                    jsonList.add(new JSONObject(jsonString));
+                } catch (Exception e) {
+                    throw new IOException("Invalid JSON data in file", e);
+                }
+            }
             sendJsons(jsonList);
-        } catch (IOException e) {
-            System.out.println(e);
+        } else {
+            throw new IOException("No valid JSON data read from file.");
         }
     }
 

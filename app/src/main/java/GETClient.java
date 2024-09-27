@@ -4,6 +4,30 @@ import org.json.JSONObject;
 
 public class GETClient {
     private static LamportClock clock = new LamportClock();
+    private NetworkClient networkClient;
+
+    public interface NetworkClient {
+        JSONObject sendRequest(String address, int port, String request) throws IOException;
+    }
+
+    public GETClient(NetworkClient networkClient) {
+        this.networkClient = networkClient;
+    }
+
+    public GETClient() {
+        this.networkClient = new DefaultNetworkClient();
+    }
+
+    public JSONObject request(String address, int port, String request) throws IOException {
+        return networkClient.sendRequest(address, port, request);
+    }
+
+    public static class DefaultNetworkClient implements NetworkClient {
+        @Override
+        public JSONObject sendRequest(String address, int port, String request) throws IOException {
+            return GETClient.sendRequest(address, port, request);
+        }
+    }
 
     private static JSONObject sendRequest(String address, int port, String request) {
         int retries = 0;
@@ -71,6 +95,10 @@ public class GETClient {
         return result;
     }
 
+    public static JSONObject processResponse(BufferedReader input) throws IOException {
+        return handleResponse(input);
+    }
+
     public static void printJson(JSONObject json, String stationID) {
         if (!stationID.equals("NULL")) {
             JSONObject target = new JSONObject();
@@ -119,8 +147,9 @@ public class GETClient {
         String request = "GET /weather.json? HTTP/1.1\r\nLamport-Clock: " + clock.getValue() + "\r\n\r\n";
 
         try {
-            JSONObject response = sendRequest(address, port, request);
-            if (response.length() == 0) {
+            GETClient client = new GETClient();
+            JSONObject response = client.request(address, port, request);
+            if (response == null || response.length() == 0) {
                 System.out.println("failed to retrieve data");
                 return;
             }

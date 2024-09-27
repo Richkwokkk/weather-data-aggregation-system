@@ -95,6 +95,11 @@ public class AggregationServer {
     }
 
     public synchronized void store(JSONObject data) {
+        if (!data.has("id")) {
+            System.out.println("Invalid data: 'id' key is missing.");
+            return;
+        }
+        
         synchronized (dataStorage) {
             dataStorage.put(data.getString("id"), data);
             synchronized (lastConnectionTime) {
@@ -277,5 +282,9 @@ public class AggregationServer {
         } catch (IOException i) {
             System.out.println(i);
         }
+    }
+
+    public JSONObject getDataStorage() {
+        return dataStorage;
     }
 }
