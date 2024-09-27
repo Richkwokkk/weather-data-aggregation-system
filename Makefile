@@ -1,5 +1,5 @@
-# Gradle wrapper
-GRADLE = ./gradlew
+# Gradle command
+GRADLE = gradle
 
 # Default target
 all: test
