@@ -1,6 +1,7 @@
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
+import java.util.HashSet;
 import org.json.JSONObject;
 
 public class AggregationServer {
@@ -11,22 +12,32 @@ public class AggregationServer {
     private static JSONObject lastConnectionTime = new JSONObject();
     private LamportClock clock = new LamportClock();
     private ServerSocket serverSocket = null;
+    private Thread janitorThread;
 
     public AggregationServer(int port) {
         this.portNumber = port;
+        AggregationServer.dataStorage = new JSONObject();
+        this.janitorThread = new Thread(() -> {
+            janitor();
+        });
+        this.janitorThread.setDaemon(true);
+        this.janitorThread.start();
     }
 
     public int validateData(String data) {
         try {
-            JSONObject json = new JSONObject(data);
-            return json.has("id") ? 1 : 0;
+            JSONObject jsonObject = new JSONObject(data);
+            // Check if the JSON object has at least one key-value pair
+            return jsonObject.length() > 0 ? 1 : 0;
         } catch (Exception e) {
+            System.out.println("Error validating data: " + e);
             return 0;
         }
     }
 
     public void recoverData() {
         try {
+            System.out.println("Recovering data...");
             if (Files.isReadable(activeFile) && Files.isReadable(backupFile)) {
                 recoverFromBoth();
             } else if (Files.isReadable(activeFile)) {
@@ -34,11 +45,14 @@ public class AggregationServer {
             } else if (Files.isReadable(backupFile)) {
                 recoverFromBackup();
             } else {
-                System.out.println("No previous file");
+                System.out.println("No previous files found. Creating new files and resetting dataStorage.");
                 createFiles();
+                dataStorage = new JSONObject();
             }
+            System.out.println("Data recovery complete. DataStorage: " + dataStorage.toString());
         } catch (IOException e) {
-            System.out.println(e);
+            System.out.println("Error during data recovery: " + e);
+            e.printStackTrace();
         }
     }
 
@@ -66,22 +80,40 @@ public class AggregationServer {
     }
 
     private void recoverFromActive() throws IOException {
+        System.out.println("Recovering from active file...");
         String data = new String(Files.readAllBytes(activeFile));
+        System.out.println("Active file content: " + data);
         if (validateData(data) == 1) {
-            Files.copy(activeFile, backupFile);
             dataStorage = new JSONObject(data);
+            System.out.println("Data validated and stored. DataStorage: " + dataStorage.toString());
+            Files.copy(activeFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
         } else {
+            System.out.println("Invalid data in active file. Deleting file and resetting dataStorage.");
             Files.delete(activeFile);
+            dataStorage = new JSONObject();
         }
     }
 
     private void recoverFromBackup() throws IOException {
+        System.out.println("Recovering from backup file...");
         String data = new String(Files.readAllBytes(backupFile));
+        System.out.println("Backup file content: " + data);
         if (validateData(data) == 1) {
-            Files.copy(backupFile, activeFile);
-            dataStorage = new JSONObject(data);
+            try {
+                JSONObject jsonData = new JSONObject(data);
+                for (String key : jsonData.keySet()) {
+                    dataStorage.put(key, jsonData.get(key));
+                }
+                System.out.println("Data validated and stored. DataStorage: " + dataStorage.toString());
+                Files.copy(backupFile, activeFile, StandardCopyOption.REPLACE_EXISTING);
+            } catch (Exception e) {
+                System.out.println("Error parsing JSON data: " + e.getMessage());
+                dataStorage = new JSONObject();
+            }
         } else {
+            System.out.println("Invalid data in backup file. Deleting file and resetting dataStorage.");
             Files.delete(backupFile);
+            dataStorage = new JSONObject();
         }
     }
 
@@ -94,22 +126,15 @@ public class AggregationServer {
         }
     }
 
-    public synchronized void store(JSONObject data) {
-        if (!data.has("id")) {
-            System.out.println("Invalid data: 'id' key is missing.");
-            return;
-        }
-        
-        synchronized (dataStorage) {
-            dataStorage.put(data.getString("id"), data);
-            synchronized (lastConnectionTime) {
-                lastConnectionTime.put(data.getString("id"), System.currentTimeMillis());
-            }
+    public synchronized void store(JSONObject jsonData) {
+        if (jsonData.has("id") && !jsonData.getString("id").isEmpty()) {
+            String id = jsonData.getString("id");
+            dataStorage.put(id, jsonData);
+            lastConnectionTime.put(id, System.currentTimeMillis());
         }
     }
 
     public synchronized void backup() {
-        // copy the content of activeFile to backupFile
         try {
             Files.copy(activeFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException i) {
@@ -149,22 +174,21 @@ public class AggregationServer {
     }
 
     private static void janitor() {
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             try {
-                Thread.sleep(10000);
+                Thread.sleep(1000);
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                Thread.currentThread().interrupt();
+                return;
             }
 
             long currentTime = System.currentTimeMillis();
 
             synchronized (dataStorage) {
-                for (String key : lastConnectionTime.keySet()) {
+                for (String key : new HashSet<>(lastConnectionTime.keySet())) {
                     if (currentTime - lastConnectionTime.getLong(key) > 30000) {
                         dataStorage.remove(key);
-                        synchronized (lastConnectionTime) {
-                            lastConnectionTime.remove(key);
-                        }
+                        lastConnectionTime.remove(key);
                     }
                 }
             }
@@ -287,4 +311,18 @@ public class AggregationServer {
     public JSONObject getDataStorage() {
         return dataStorage;
     }
+
+    public void clearDataStorage() {
+        dataStorage = new JSONObject();
+        lastConnectionTime = new JSONObject();
+    }
+
+    public static Path getActiveFile() {
+        return activeFile;
+    }
+
+    public static Path getBackupFile() {
+        return backupFile;
+    }
+    
 }
