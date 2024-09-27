@@ -1,6 +1,7 @@
 import java.io.IOException;
 import java.util.logging.*;
 import java.nio.file.Paths;
+import java.nio.file.Files;
 
 public class LamportClock {
     private String time;
@@ -25,9 +26,12 @@ public class LamportClock {
 
     public void log(String eventName) {
         Logger logger = Logger.getLogger("lamportlogger");
-        String logFilePath = Paths.get("logs", this.time + ".log").toString();
+        String logDirPath = "logs";
+        String logFilePath = logDirPath + "/" + this.time + ".log";
         FileHandler handler = null;
         try {
+            Files.createDirectories(Paths.get(logDirPath));
+            
             handler = new FileHandler(logFilePath, true);
             logger.addHandler(handler);
             logger.setUseParentHandlers(false);

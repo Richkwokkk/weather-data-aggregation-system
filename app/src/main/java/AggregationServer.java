@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.file.*;
 import java.util.HashSet;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 public class AggregationServer {
@@ -25,9 +26,12 @@ public class AggregationServer {
     }
 
     public int validateData(String data) {
+        if (data == null || data.trim().isEmpty()) {
+            System.out.println("Data is empty or null.");
+            return 0;
+        }
         try {
             JSONObject jsonObject = new JSONObject(data);
-            // Check if the JSON object has at least one key-value pair
             return jsonObject.length() > 0 ? 1 : 0;
         } catch (Exception e) {
             System.out.println("Error validating data: " + e);
@@ -63,34 +67,40 @@ public class AggregationServer {
 
         if (activeLastModified > backupLastModified) {
             data = new String(Files.readAllBytes(activeFile));
-            if (validateData(data) == 1) {
-                Files.copy(activeFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
-            } else {
-                recoverFromBackup();
-            }
         } else {
             data = new String(Files.readAllBytes(backupFile));
-            if (validateData(data) == 1) {
-                Files.copy(backupFile, activeFile, StandardCopyOption.REPLACE_EXISTING);
-            } else {
-                recoverFromActive();
+        }
+
+        if (data.trim().isEmpty()) {
+            System.out.println("Data file is empty. Starting with empty dataStorage.");
+            dataStorage = new JSONObject();
+        } else {
+            try {
+                dataStorage = new JSONObject(data);
+            } catch (JSONException e) {
+                System.out.println("Invalid JSON data in file. Starting with empty dataStorage.");
+                dataStorage = new JSONObject();
             }
         }
-        dataStorage = new JSONObject(data);
     }
 
     private void recoverFromActive() throws IOException {
         System.out.println("Recovering from active file...");
         String data = new String(Files.readAllBytes(activeFile));
         System.out.println("Active file content: " + data);
-        if (validateData(data) == 1) {
-            dataStorage = new JSONObject(data);
-            System.out.println("Data validated and stored. DataStorage: " + dataStorage.toString());
-            Files.copy(activeFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
-        } else {
-            System.out.println("Invalid data in active file. Deleting file and resetting dataStorage.");
-            Files.delete(activeFile);
+        if (data.trim().isEmpty()) {
+            System.out.println("Active file is empty. Starting with empty dataStorage.");
             dataStorage = new JSONObject();
+        } else {
+            try {
+                dataStorage = new JSONObject(data);
+                System.out.println("Data validated and stored. DataStorage: " + dataStorage.toString());
+                Files.copy(activeFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
+            } catch (JSONException e) {
+                System.out.println("Invalid JSON data in active file. Starting with empty dataStorage.");
+                dataStorage = new JSONObject();
+                Files.delete(activeFile);
+            }
         }
     }
 
@@ -98,22 +108,19 @@ public class AggregationServer {
         System.out.println("Recovering from backup file...");
         String data = new String(Files.readAllBytes(backupFile));
         System.out.println("Backup file content: " + data);
-        if (validateData(data) == 1) {
+        if (data.trim().isEmpty()) {
+            System.out.println("Backup file is empty. Starting with empty dataStorage.");
+            dataStorage = new JSONObject();
+        } else {
             try {
-                JSONObject jsonData = new JSONObject(data);
-                for (String key : jsonData.keySet()) {
-                    dataStorage.put(key, jsonData.get(key));
-                }
+                dataStorage = new JSONObject(data);
                 System.out.println("Data validated and stored. DataStorage: " + dataStorage.toString());
                 Files.copy(backupFile, activeFile, StandardCopyOption.REPLACE_EXISTING);
-            } catch (Exception e) {
-                System.out.println("Error parsing JSON data: " + e.getMessage());
+            } catch (JSONException e) {
+                System.out.println("Invalid JSON data in backup file. Starting with empty dataStorage.");
                 dataStorage = new JSONObject();
+                Files.delete(backupFile);
             }
-        } else {
-            System.out.println("Invalid data in backup file. Deleting file and resetting dataStorage.");
-            Files.delete(backupFile);
-            dataStorage = new JSONObject();
         }
     }
 

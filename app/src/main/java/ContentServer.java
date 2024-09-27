@@ -14,7 +14,7 @@ public class ContentServer {
     private JSONObject myJSONObject;
     private String filePath;
     private String address;
-    private int port = 8080;
+    private int port = 4567;
     private boolean testMode = false;
     private static final CopyOnWriteArrayList<ContentServer> serverInstances = new CopyOnWriteArrayList<>();
     private static final int MAX_SERVERS = 3;
