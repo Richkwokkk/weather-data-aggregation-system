@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+/**
+ * ContentServer class for handling weather data transmission to multiple servers.
+ */
 public class ContentServer {
     private static LamportClock clock = new LamportClock();
     private Socket socket;
@@ -19,6 +22,11 @@ public class ContentServer {
     private static final CopyOnWriteArrayList<ContentServer> serverInstances = new CopyOnWriteArrayList<>();
     private static final int MAX_SERVERS = 3;
 
+    /**
+     * Reads JSON data from a file and returns it as a list of strings.
+     * @return List of JSON strings read from the file
+     * @throws IOException if there's an error reading the file or if the file format is invalid
+     */
     private List<String> readFile() throws IOException {
         try {
             JSONObject currentData = new JSONObject();
@@ -26,13 +34,16 @@ public class ContentServer {
             try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
+                    // Skip empty lines and brackets
                     line = line.trim();
                     if (line.isEmpty() || line.equals("{") || line.equals("}")) continue;
 
+                    // Remove trailing comma if present
                     if (line.endsWith(",")) {
                         line = line.substring(0, line.length() - 1);
                     }
 
+                    // Split the line into key and value
                     String[] tokens = line.split(":", 2);
                     if (tokens.length < 2) {
                         continue;
@@ -41,6 +52,7 @@ public class ContentServer {
                     String key = tokens[0].replaceAll("\"", "").trim();
                     String value = tokens[1].replaceAll("\"", "").trim();
 
+                    // Start a new JSON object when a new ID is encountered
                     if (key.equalsIgnoreCase("id") && !currentData.isEmpty()) {
                         resultList.add(new JSONObject(currentData.toString()));
                         currentData = new JSONObject();
@@ -49,10 +61,12 @@ public class ContentServer {
                     currentData.put(key, value);
                 }
 
+                // Add the last JSON object if not empty
                 if (!currentData.isEmpty()) {
                     resultList.add(new JSONObject(currentData.toString()));
                 }
 
+                // Convert JSONObjects to strings
                 return resultList.stream()
                     .map(JSONObject::toString)
                     .collect(Collectors.toList());
@@ -62,11 +76,22 @@ public class ContentServer {
         }
     }
 
+    /**
+     * Public method to read file content from a given file path.
+     * @param filePath Path to the file to be read
+     * @return List of JSON strings read from the file
+     * @throws IOException if there's an error reading the file
+     */
     public List<String> readFilePublic(String filePath) throws IOException {
         this.filePath = filePath;
         return readFile();
     }
 
+    /**
+     * Sends a list of JSON objects to the server.
+     * @param jsonList List of JSON objects to be sent
+     * @throws IOException if there's an error in sending data or connecting to the server
+     */
     public void sendJsons(ArrayList<JSONObject> jsonList) throws IOException {
         if (jsonList == null || jsonList.isEmpty()) {
             System.out.println("No valid JSON data to send.");
@@ -78,6 +103,7 @@ public class ContentServer {
 
         for (int i = 0; i < length; i++) {
             try (Socket socket = new Socket(address, port)) {
+                // Set socket timeout to 5 seconds
                 socket.setSoTimeout(5000);
                 System.out.println("Connected");
 
@@ -88,11 +114,13 @@ public class ContentServer {
                 try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
                      BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
+                    // Skip entries with invalid IDs
                     if (currentJSON.getString("id").length() < 2) {
                         System.out.println("Invalid entry, id is empty");
                         continue;
                     }
 
+                    // Construct the PUT request with Lamport clock
                     String request = "PUT /weather.json HTTP/1.1\r\n" +
                             "Content-Type: application/json\r\n" +
                             "Content-Length: " + currentJSON.toString().length() + "\r\n" +
@@ -102,12 +130,15 @@ public class ContentServer {
                     writer.write("\r\n");
                     writer.flush();
 
+                    // Wait for 1 second before reading response
                     Thread.sleep(1000);
 
+                    // Read the response from the server
                     String ret = reader.readLine();
                     String[] split = ret.trim().split(" ", 3);
                     int returnCode = Integer.parseInt(split[1]);
 
+                    // Update Lamport clock based on server response
                     while ((ret = reader.readLine()) != null && !ret.isEmpty()) {
                         if (ret.startsWith("Lamport-Clock:")) {
                             String[] tokens = ret.split(":", 2);
@@ -116,11 +147,13 @@ public class ContentServer {
                         }
                     }
 
+                    // Retry if the server didn't respond with 200 or 201
                     if (returnCode != 200 && returnCode != 201) {
                         i--;
                         Thread.sleep(1000);
                     }
                 } catch (IOException | InterruptedException e) {
+                    // Handle exceptions and retry if necessary
                     i--;
                     retries++;
                     if (retries > 3) {
@@ -134,6 +167,7 @@ public class ContentServer {
                     }
                 }
             } catch (IOException e) {
+                // Handle connection failures
                 System.out.println("Connection failed: " + e.getMessage());
                 if (testMode) {
                     System.out.println("Test mode: Continuing despite connection failure");
@@ -153,20 +187,38 @@ public class ContentServer {
         }
     }
 
+    /**
+     * Sets the socket for the server.
+     * @param socket The socket to be set
+     */ 
     public void setSocket(Socket socket) {
         this.socket = socket;
     }
 
+    /**
+     * Constructor for ContentServer.
+     * @param address The address of the server
+     * @param port The port number for the server
+     * @param filePath The path to the file containing weather data
+     */
     public ContentServer(String address, int port, String filePath) {
         this.address = address;
         this.port = port;
         this.filePath = filePath;
     }
 
+    /**
+     * Sets the test mode for the server.
+     * @param testMode The test mode flag
+     */
     public void setTestMode(boolean testMode) {
         this.testMode = testMode;
     }
 
+    /**
+     * Sends data read from the file to the server.
+     * @throws IOException if there's an error reading the file or sending data
+     */
     public void sendData() throws IOException {
         List<String> jsonStrings = readFile();
         if (jsonStrings != null && !jsonStrings.isEmpty()) {
@@ -184,16 +236,29 @@ public class ContentServer {
         }
     }
 
+    /**
+     * Adds a new ContentServer instance to the list of server instances.
+     * @param server ContentServer instance to be added
+     */
     public static void addServerInstance(ContentServer server) {
         if (serverInstances.size() < MAX_SERVERS) {
             serverInstances.add(server);
         }
     }
 
+    /**
+     * Removes a ContentServer instance from the list of server instances.
+     * @param server ContentServer instance to be removed
+     */
     public static void removeServerInstance(ContentServer server) {
         serverInstances.remove(server);
     }
 
+    /**
+     * Sends data to all registered server instances.
+     * @param jsonList List of JSON objects to be sent to all servers
+     * @throws IOException if there's an error sending data to all servers
+     */
     public static void sendDataToAllServers(List<JSONObject> jsonList) throws IOException {
         int failedServers = 0;
         IOException lastException = null;
@@ -215,6 +280,10 @@ public class ContentServer {
         }
     }
 
+    /**
+     * Main method to run the ContentServer application.
+     * @param args Command-line arguments: [address] [filepath]
+     */
     public static void main(String[] args) {
         if (args.length < 2) {
             System.out.println("Not enough arguments...");
@@ -258,10 +327,17 @@ public class ContentServer {
         }
     }
 
+    /**
+     * Clears all registered server instances.
+     */
     public static void clearServerInstances() {
         serverInstances.clear();
     }
 
+    /**
+     * Gets the count of registered server instances.
+     * @return Number of registered server instances
+     */
     public static int getServerInstancesCount() {
         return serverInstances.size();
     }
