@@ -1,5 +1,7 @@
 # Weather Data Aggregation System
 
+**This README file serves the same purpose as the "change.pdf" in the assignment requirements. It aims to describe the project's functionality, build process, and usage instructions.**
+
 This project implements a distributed system for collecting, aggregating, and retrieving weather data. It consists of three main components: Content Servers, an Aggregation Server, and GET Clients.
 
 ## Project Structure
@@ -13,19 +15,34 @@ This project implements a distributed system for collecting, aggregating, and re
 
 ### 1. Content Server
 
-The Content Server reads weather data from JSON files and sends it to the Aggregation Server using HTTP PUT requests. It implements a retry mechanism and uses Lamport Clock for logical time synchronization.
+The Content Server is responsible for reading weather data from JSON files and sending it to the Aggregation Server using HTTP PUT requests. Key functionalities include:
+
+- **Data Reading**: It reads JSON data from specified files, ensuring that the data is correctly formatted and valid.
+- **Data Transmission**: Implements a retry mechanism to handle transient failures when sending data to the Aggregation Server. It uses a Lamport Clock to maintain logical time during data transmission.
+- **Error Handling**: The server can handle invalid JSON data gracefully, logging errors and skipping invalid entries.
+- **Concurrency**: Supports multiple instances to send data concurrently to the Aggregation Server.
 
 ### 2. Aggregation Server
 
-The Aggregation Server receives weather data from Content Servers, stores it, and serves it to GET Clients. It implements data persistence, recovery mechanisms, and a "janitor" process to remove stale data.
+The Aggregation Server receives weather data from multiple Content Servers, stores it, and serves it to GET Clients. Its main features include:
+
+- **Data Storage**: It maintains a persistent storage of received data in JSON format, allowing for efficient retrieval and management.
+- **Data Recovery**: Implements mechanisms to recover data from active and backup files in case of failures. It can handle both valid and invalid data formats.
+- **Janitor Process**: A background process that periodically removes stale data that hasn't been updated for a specified duration (30 seconds), ensuring that the data remains current and relevant.
+- **Client Handling**: Manages incoming client connections and processes GET and PUT requests, responding with appropriate HTTP status codes and data.
 
 ### 3. GET Client
 
-The GET Client retrieves weather data from the Aggregation Server using HTTP GET requests. It can request data for specific weather stations or retrieve all available data.
+The GET Client retrieves weather data from the Aggregation Server using HTTP GET requests. Its functionalities include:
+
+- **Data Retrieval**: It can request specific weather data for individual stations or retrieve all available data.
+- **Response Processing**: Handles server responses, updating the Lamport Clock based on the server's response and extracting the relevant JSON data.
+- **Error Handling**: Implements retry logic for failed requests and can handle various HTTP response codes.
+- **Data Display**: Provides functionality to print the retrieved JSON data in a user-friendly format, allowing users to filter by specific station IDs.
 
 ### 4. Lamport Clock
 
-A logical clock implementation used for maintaining causal ordering of events in the distributed system.
+A logical clock implementation used for maintaining causal ordering of events in the distributed system. The Lamport Clock ensures that all events are timestamped correctly, allowing the system to resolve conflicts and maintain consistency across distributed components.
 
 ## Custom JSON Parsing (for bonus mark)
 
